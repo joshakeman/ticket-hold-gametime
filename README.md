@@ -130,3 +130,13 @@ scripts/seed.sql     demo data
   validation and seat status.
 
 `internal/api/api_test.go` runs the HTTP flow end to end against the database.
+
+## Claude Code skills
+
+`CLAUDE.md` has project notes for Claude Code, and `.claude/skills/` has:
+
+- `/test`: runs the suite against the real database and flags skipped tests.
+- `/demo`: starts the server and walks through hold → conflict → purchase → replay with curl.
+- `money-safety`: loads automatically when you edit store or migration code.
+  It holds the rules that stop seats from being sold twice or buyers from
+  being charged twice.

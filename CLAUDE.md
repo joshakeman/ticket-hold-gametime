@@ -14,6 +14,8 @@ router). See README.md for the API and the concurrency design.
 
 ## Architecture rules
 
+Before touching hold, purchase, release or seat/order SQL, follow `.claude/skills/money-safety/SKILL.md`.
+
 - All SQL lives in `internal/store`. `internal/api` only parses input, calls the
   store and maps errors to status codes in `writeStoreError`.
 - Seat state changes are single conditional (compare-and-set) UPDATEs with
