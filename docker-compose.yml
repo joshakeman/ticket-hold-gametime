@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: tickets
+      POSTGRES_PASSWORD: tickets
+      POSTGRES_DB: tickets
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tickets"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
