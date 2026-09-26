@@ -49,7 +49,7 @@ func New(pool *pgxpool.Pool) *Store {
 // serialization failure. fn may run twice, so it must reset any captured state.
 func (s *Store) inTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 	var err error
-	for attempt := 0; attempt < 2; attempt++ {
+	for range 2 {
 		err = s.runTx(ctx, fn)
 		if !isRetryable(err) {
 			return err

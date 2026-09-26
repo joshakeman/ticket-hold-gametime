@@ -49,7 +49,7 @@ func newEvent(t *testing.T, n int) (s *Store, eventID int64, seatIDs []int64) {
 		`INSERT INTO events (name, starts_at) VALUES ($1, now()) RETURNING id`, t.Name()).Scan(&eventID); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		var id int64
 		if err := testPool.QueryRow(ctx,
 			`INSERT INTO seats (event_id, label, price_cents) VALUES ($1, $2, 1000) RETURNING id`,
@@ -82,7 +82,7 @@ func TestHoldRaceSingleSeat(t *testing.T) {
 	var wins, unavailable atomic.Int32
 	var wg sync.WaitGroup
 	start := make(chan struct{})
-	for i := 0; i < buyers; i++ {
+	for i := range buyers {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -122,7 +122,7 @@ func TestOverlappingMultiSeatHoldsAreAllOrNothing(t *testing.T) {
 	s := New(racePool)
 
 	deadlocksBefore := deadlockCount(t)
-	for r := 0; r < rounds; r++ {
+	for range rounds {
 		raceOverlappingHolds(t, s)
 	}
 
@@ -154,7 +154,7 @@ func raceOverlappingHolds(t *testing.T, s *Store) {
 
 	var wg sync.WaitGroup
 	start := make(chan struct{})
-	for i := 0; i < buyers; i++ {
+	for i := range buyers {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -343,10 +343,8 @@ func TestConcurrentPurchaseSameHoldIsIdempotent(t *testing.T) {
 	ids := make(chan string, n)
 	var firsts atomic.Int32
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range n {
+		wg.Go(func() {
 			o, replayed, err := s.Purchase(ctx, h.ID, "alice", key(ev, "same-key"))
 			if err != nil {
 				t.Errorf("purchase: %v", err)
@@ -356,7 +354,7 @@ func TestConcurrentPurchaseSameHoldIsIdempotent(t *testing.T) {
 				firsts.Add(1)
 			}
 			ids <- o.ID
-		}()
+		})
 	}
 	wg.Wait()
 	close(ids)

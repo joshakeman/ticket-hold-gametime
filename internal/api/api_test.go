@@ -33,7 +33,7 @@ func newServer(t *testing.T) (srv *httptest.Server, eventID int64, seatIDs []int
 	if err := pool.QueryRow(ctx, `INSERT INTO events (name, starts_at) VALUES ($1, now()) RETURNING id`, t.Name()).Scan(&eventID); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		var id int64
 		if err := pool.QueryRow(ctx, `INSERT INTO seats (event_id, label, price_cents) VALUES ($1, $2, 2500) RETURNING id`,
 			eventID, fmt.Sprintf("S%d", i)).Scan(&id); err != nil {
