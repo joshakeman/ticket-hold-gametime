@@ -137,6 +137,13 @@ scripts/seed.sql     demo data
 
 - `/test`: runs the suite against the real database and flags skipped tests.
 - `/demo`: starts the server and walks through hold → conflict → purchase → replay with curl.
+- `/check-comments`: read-only review of the current diff (or named files) for
+  comments that contradict the code, overclaim, or restate the obvious.
+  Adapted from [Ardan Labs' service repo](https://github.com/ardanlabs/service)
+  (Apache 2.0).
+- `use-modern-go`: loads automatically when writing Go. It detects the Go
+  version from `go.mod` (1.26) and applies modern idioms up to that version.
+  Adapted from Ardan Labs' service repo (Apache 2.0).
 - `money-safety`: loads automatically when you edit store or migration code.
   It holds the rules that stop seats from being sold twice or buyers from
   being charged twice.
