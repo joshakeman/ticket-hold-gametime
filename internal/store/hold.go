@@ -13,6 +13,10 @@ type Hold struct {
 	EventID   int64     `json:"event_id"`
 	SeatIDs   []int64   `json:"seat_ids"`
 	ExpiresAt time.Time `json:"expires_at"`
+	// ExpiresIn is how long the hold has left, computed by Postgres so that
+	// callers never compare our timestamps with their own clock. Only set by
+	// CreateHold.
+	ExpiresIn time.Duration `json:"-"`
 	// Status is "active", "expired" or "purchased". Only set by GetHold.
 	Status string `json:"status,omitempty"`
 }
@@ -75,11 +79,12 @@ func (s *Store) CreateHold(ctx context.Context, eventID int64, buyerID string, s
 
 		var holdID string
 		var expiresAt time.Time
+		var expiresInSecs float64
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO holds (event_id, buyer_id, seat_count, expires_at)
 			VALUES ($1, $2, $3, now() + make_interval(secs => $4::float8))
-			RETURNING id::text, expires_at`,
-			eventID, buyerID, len(ids), s.holdDuration.Seconds()).Scan(&holdID, &expiresAt); err != nil {
+			RETURNING id::text, expires_at, extract(epoch FROM expires_at - now())::float8`,
+			eventID, buyerID, len(ids), s.holdDuration.Seconds()).Scan(&holdID, &expiresAt, &expiresInSecs); err != nil {
 			return err
 		}
 
@@ -102,7 +107,11 @@ func (s *Store) CreateHold(ctx context.Context, eventID int64, buyerID string, s
 			return &UnavailableError{SeatIDs: missing(ids, taken)}
 		}
 
-		out = Hold{ID: holdID, EventID: eventID, SeatIDs: ids, ExpiresAt: expiresAt}
+		out = Hold{
+			ID: holdID, EventID: eventID, SeatIDs: ids,
+			ExpiresAt: expiresAt,
+			ExpiresIn: time.Duration(expiresInSecs * float64(time.Second)),
+		}
 		return nil
 	})
 	return out, err

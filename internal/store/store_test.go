@@ -285,6 +285,9 @@ func TestPurchaseFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if d := h.ExpiresIn - DefaultHoldDuration; d < -time.Millisecond || d > time.Millisecond {
+		t.Fatalf("ExpiresIn = %v, want %v", h.ExpiresIn, DefaultHoldDuration)
+	}
 
 	if _, _, err := s.Purchase(ctx, h.ID, "mallory", key(ev, "k1")); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("other buyer purchase: got %v", err)

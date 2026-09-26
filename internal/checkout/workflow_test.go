@@ -26,10 +26,13 @@ func newEnv(t *testing.T, acts *Activities) *testsuite.TestWorkflowEnvironment {
 	return env
 }
 
-// holdFor mocks CreateHold with a hold that expires 10 minutes after the
-// workflow starts.
+// holdFor mocks CreateHold with a hold that Postgres says has 10 minutes left.
 func holdFor(env *testsuite.TestWorkflowEnvironment) HoldInfo {
-	h := HoldInfo{HoldID: "h1", SeatIDs: input.SeatIDs, ExpiresAt: env.Now().Add(10 * time.Minute), TotalCents: 5000}
+	h := HoldInfo{
+		HoldID: "h1", SeatIDs: input.SeatIDs, TotalCents: 5000,
+		ExpiresAt: env.Now().Add(10 * time.Minute),
+		ExpiresIn: 10 * time.Minute,
+	}
 	env.OnActivity(a.CreateHold, mock.Anything, input).Return(h, nil).Once()
 	return h
 }
@@ -87,6 +90,60 @@ func TestCheckoutHoldExpiresWithoutPayment(t *testing.T) {
 	}
 	env.AssertExpectations(t)
 	env.AssertActivityNotCalled(t, "ChargePayment", mock.Anything, mock.Anything)
+}
+
+// The timer must use the duration Postgres computed, not ExpiresAt compared
+// with Temporal's clock. Here Postgres's clock is an hour behind Temporal's,
+// so ExpiresAt looks long past, yet the hold has 10 minutes left and a
+// payment at minute 1 must succeed.
+func TestCheckoutTimerIgnoresClockSkew(t *testing.T) {
+	env := newEnv(t, &Activities{})
+	skewed := HoldInfo{
+		HoldID: "h1", SeatIDs: input.SeatIDs, TotalCents: 5000,
+		ExpiresAt: env.Now().Add(-50 * time.Minute),
+		ExpiresIn: 10 * time.Minute,
+	}
+	env.OnActivity(a.CreateHold, mock.Anything, input).Return(skewed, nil).Once()
+	pay(env, "tok_ok")
+	env.OnActivity(a.ChargePayment, mock.Anything, mock.Anything).Return("ch_1", nil).Once()
+	env.OnActivity(a.Purchase, mock.Anything, mock.Anything).Return(store.Order{ID: "o1"}, nil).Once()
+	env.OnActivity(a.ReleaseHold, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	env.ExecuteWorkflow(CheckoutWorkflow, input)
+
+	if r := result(t, env); r.Status != StatusPurchased {
+		t.Fatalf("result = %+v, want purchased (timer fired early?)", r)
+	}
+	env.AssertActivityNotCalled(t, "ReleaseHold", mock.Anything, mock.Anything)
+}
+
+// Expiry must wait the full duration: a payment at minute 9 still succeeds,
+// while one at minute 11 finds the hold released.
+func TestCheckoutTimerFiresAfterExpiresIn(t *testing.T) {
+	for _, tc := range []struct {
+		payAt time.Duration
+		want  string
+	}{
+		{9 * time.Minute, StatusPurchased},
+		{11 * time.Minute, StatusHoldExpired},
+	} {
+		t.Run(tc.payAt.String(), func(t *testing.T) {
+			env := newEnv(t, &Activities{})
+			holdFor(env)
+			env.RegisterDelayedCallback(func() {
+				env.SignalWorkflow(PaySignal, PayRequest{PaymentToken: "tok_ok"})
+			}, tc.payAt)
+			env.OnActivity(a.ChargePayment, mock.Anything, mock.Anything).Return("ch_1", nil).Maybe()
+			env.OnActivity(a.Purchase, mock.Anything, mock.Anything).Return(store.Order{ID: "o1"}, nil).Maybe()
+			env.OnActivity(a.ReleaseHold, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+			env.ExecuteWorkflow(CheckoutWorkflow, input)
+
+			if r := result(t, env); r.Status != tc.want {
+				t.Fatalf("result = %+v, want %s", r, tc.want)
+			}
+		})
+	}
 }
 
 func TestCheckoutChargeDeclinedReleasesHold(t *testing.T) {

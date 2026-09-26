@@ -31,6 +31,10 @@ type HoldInfo struct {
 	HoldID    string    `json:"hold_id"`
 	SeatIDs   []int64   `json:"seat_ids"`
 	ExpiresAt time.Time `json:"expires_at"`
+	// ExpiresIn is the hold's remaining time as computed by Postgres. The
+	// workflow's timer uses this duration rather than ExpiresAt, so clock
+	// skew between Postgres and Temporal can't make it fire early or late.
+	ExpiresIn time.Duration `json:"expires_in"`
 	// TotalCents is the price of the held seats, read from the seats table.
 	TotalCents int64 `json:"total_cents"`
 }
@@ -68,7 +72,7 @@ func (a *Activities) CreateHold(ctx context.Context, in Input) (HoldInfo, error)
 			total += int64(s.PriceCents)
 		}
 	}
-	return HoldInfo{HoldID: h.ID, SeatIDs: h.SeatIDs, ExpiresAt: h.ExpiresAt, TotalCents: total}, nil
+	return HoldInfo{HoldID: h.ID, SeatIDs: h.SeatIDs, ExpiresAt: h.ExpiresAt, ExpiresIn: h.ExpiresIn, TotalCents: total}, nil
 }
 
 func (a *Activities) ChargePayment(ctx context.Context, in ChargeInput) (string, error) {

@@ -6,8 +6,12 @@
 // Workflow code must be deterministic. Temporal rebuilds a workflow's state
 // after a crash by replaying its history through this code, so every replay
 // has to make the same decisions. That rules out time.Now, randomness, and
-// I/O here: use workflow.Now and workflow timers, and do all I/O in
-// activities.
+// I/O here: use workflow timers, and do all I/O in activities.
+//
+// Hold expiry is still decided by Postgres's clock (the compare-and-set
+// checks in the store). The workflow's timer only decides when to stop
+// waiting, and it uses a duration computed by Postgres so the two clocks are
+// never compared.
 package checkout
 
 import (
@@ -85,9 +89,13 @@ func CheckoutWorkflow(ctx workflow.Context, in Input) (Result, error) {
 
 	// Wait for the pay signal or the hold's expiry, whichever comes first.
 	// The timer is durable: it fires even if every worker restarts meanwhile.
+	// It runs for the duration Postgres computed, not ExpiresAt minus
+	// workflow.Now: that would compare Postgres's clock with Temporal's.
+	// Postgres still decides expiry; the timer only decides when to stop
+	// waiting.
 	timerCtx, cancelTimer := workflow.WithCancel(ctx)
 	defer cancelTimer()
-	expired := workflow.NewTimer(timerCtx, hold.ExpiresAt.Sub(workflow.Now(ctx)))
+	expired := workflow.NewTimer(timerCtx, hold.ExpiresIn)
 	var pay PayRequest
 	paid := false
 	sel := workflow.NewSelector(ctx)

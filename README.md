@@ -119,9 +119,14 @@ CreateHold ──► wait for "pay" signal ──► ChargePayment ──► Pur
               (hold_expired)            (payment_failed)    (purchase_failed)
 ```
 
-- **Durable waiting.** The hold timer is a Temporal timer set to the hold's
-  `expires_at`. If every worker crashes, the timer still fires, and the
-  workflow resumes where it left off.
+- **Durable waiting.** The hold timer is a Temporal timer. If every worker
+  crashes, the timer still fires, and the workflow resumes where it left off.
+- **One clock decides expiry.** Postgres's `now()` still decides whether a
+  hold has expired: the store's compare-and-set checks enforce it. The timer
+  only decides when the workflow stops waiting. It runs for the remaining time
+  Postgres computed when creating the hold (`expires_at - now()`), not
+  `expires_at` minus Temporal's clock, so skew between the two clocks can't
+  make it fire early or late.
 - **Saga.** Each step that fails undoes the earlier ones in reverse order. The
   important case: the charge succeeds but `Purchase` fails (e.g. the hold
   expired during the charge). Then the buyer is refunded and the hold released.
@@ -147,6 +152,7 @@ test environment, so they need no server, and they skip over time
 (simulated), so a 10-minute timer fires instantly. They cover:
 - the happy path;
 - expiry without payment;
+- the timer running for Postgres's duration, even with skewed clocks;
 - a declined card;
 - refund-then-release when `Purchase` fails;
 - a charge whose response is lost: it's retried and charged only once.
