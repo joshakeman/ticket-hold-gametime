@@ -8,10 +8,12 @@ These rules exist because selling a seat twice or charging a buyer twice is the 
 
 - Every change to seat or order state happens inside one transaction via `inTx`. The closure may run twice, so reset any captured output at the top.
 - Claim seats with a compare-and-set `UPDATE ... WHERE <still available> RETURNING id` and compare the returned count to what was requested. Never SELECT availability and then UPDATE in a separate step.
-- When locking several seats, lock them in ascending id order (`sortedUnique` + `ORDER BY id FOR UPDATE`) so overlapping requests cannot deadlock.
+- When locking several seats, lock them in ascending id order so overlapping requests cannot deadlock.
+- When locking several rows, lock order comes from ORDER BY in the SQL (`SELECT ... ORDER BY id FOR UPDATE`); sorting the slice in Go does not set lock order.
 - Serialize operations on one hold by locking the hold row (`lockHold`) first.
 - Purchases require an Idempotency-Key. The same key on the same hold returns the stored order unchanged; a different key or a reused key on another hold is a conflict.
 - Prices come from the `seats` table, never from the request body.
 - Time comes from Postgres `now()`, never the Go clock.
 - Never make network calls (payments, notifications) inside a transaction that holds seat locks. Commit a pending state first, call out, then update.
 - Any change here must keep the concurrency tests passing under `make test` (race detector on, real Postgres). A run where tests skip is not a pass.
+- Concurrency tests must detect deadlocks directly via `pg_stat_database.deadlocks`, because `inTx`'s retry hides them. Prove a new concurrency test works by removing the fix and confirming the test fails.

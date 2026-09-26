@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/josh/ticket-hold-gametime/migrations"
@@ -106,8 +108,42 @@ func TestHoldRaceSingleSeat(t *testing.T) {
 }
 
 func TestOverlappingMultiSeatHoldsAreAllOrNothing(t *testing.T) {
-	s, ev, seats := newEvent(t, 6)
+	// A deadlock needs two transactions to collide at the wrong moment, so
+	// one race can miss it. Several rounds make a lock-order bug fail reliably.
+	const rounds = 5
+
+	// The races get their own pool so closing it ends the backends, which
+	// makes them flush their deadlock counts to pg_stat_database.
+	racePool, err := pgxpool.New(context.Background(), testPool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer racePool.Close()
+	s := New(racePool)
+
+	deadlocksBefore := deadlockCount(t)
+	for r := 0; r < rounds; r++ {
+		raceOverlappingHolds(t, s)
+	}
+
+	// inTx retries a deadlock once, so most deadlocks never surface as errors.
+	// Count them in Postgres instead.
+	racePool.Close()
+	if n := waitForDeadlocks(t, deadlocksBefore); n > 0 {
+		t.Errorf("%d deadlocks during the races; seat rows are not locked in a consistent order", n)
+	}
+}
+
+// raceOverlappingHolds has 100 buyers each ask for 3 of 6 seats, in random
+// order, all at once, and checks that holds are all-or-nothing.
+func raceOverlappingHolds(t *testing.T, s *Store) {
+	t.Helper()
+	_, ev, seats := newEvent(t, 6)
 	const buyers = 100
+
+	// Without this, fresh seats sit on disk in id order and a scan without
+	// ORDER BY happens to lock them in id order anyway.
+	scramblePhysicalOrder(t, seats)
 
 	type result struct {
 		holdID string
@@ -167,6 +203,52 @@ func TestOverlappingMultiSeatHoldsAreAllOrNothing(t *testing.T) {
 	}
 	if len(won) == 0 {
 		t.Fatal("expected at least one winner")
+	}
+}
+
+// scramblePhysicalOrder rewrites each seat row once in shuffled order. An
+// UPDATE writes a new row version, so the rows end up on disk in that order
+// instead of id order.
+func scramblePhysicalOrder(t *testing.T, seatIDs []int64) {
+	t.Helper()
+	order := slices.Clone(seatIDs)
+	rand.New(rand.NewSource(1)).Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
+	if slices.IsSorted(order) {
+		slices.Reverse(order)
+	}
+	for _, id := range order {
+		if _, err := testPool.Exec(context.Background(), `UPDATE seats SET label = label WHERE id = $1`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// deadlockCount returns how many deadlocks Postgres has detected in this
+// database. Backends report the count asynchronously, so it can lag.
+func deadlockCount(t *testing.T) int64 {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `SELECT pg_stat_clear_snapshot()`); err != nil {
+		t.Fatal(err)
+	}
+	var n int64
+	if err := testPool.QueryRow(ctx,
+		`SELECT deadlocks FROM pg_stat_database WHERE datname = current_database()`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// waitForDeadlocks polls for up to 1s and returns how many deadlocks were
+// recorded since before.
+func waitForDeadlocks(t *testing.T, before int64) int64 {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		if n := deadlockCount(t) - before; n > 0 || time.Now().After(deadline) {
+			return n
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

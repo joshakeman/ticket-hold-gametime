@@ -80,9 +80,10 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-// sortedUnique returns ids sorted ascending with duplicates removed. Locking
-// rows in one global order is what keeps overlapping multi-seat holds from
-// deadlocking.
+// sortedUnique returns ids sorted ascending with duplicates removed.
+// De-duplicating keeps a hold's seat_count equal to the rows it claims, and
+// sorting gives predictable output. It does not set lock order: that comes
+// from ORDER BY id in CreateHold's locking query.
 func sortedUnique(ids []int64) []int64 {
 	out := slices.Clone(ids)
 	slices.Sort(out)

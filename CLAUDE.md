@@ -21,8 +21,8 @@ Before touching hold, purchase, release or seat/order SQL, follow `.claude/skill
 - Seat state changes are single conditional (compare-and-set) UPDATEs with
   `RETURNING`; the row count decides success. Don't replace this with
   read-then-write logic or Go-side locks.
-- Lock seat rows in ascending id order (`sortedUnique` + `ORDER BY id FOR
-  UPDATE`) to avoid deadlocks. Purchase/release serialize on the hold row via
+- Lock seat rows in ascending id order with `ORDER BY id FOR UPDATE` in the
+  SQL to avoid deadlocks (sorting in Go does not set lock order). Purchase/release serialize on the hold row via
   `lockHold`.
 - Use `s.inTx` for multi-statement work. Its closure can run twice (retry on
   40P01/40001), so reset any captured outputs at the top of the closure.
