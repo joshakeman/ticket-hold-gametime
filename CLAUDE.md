@@ -34,6 +34,10 @@ Before touching hold, purchase, release or seat/order SQL, follow `.claude/skill
 - New store errors: add a sentinel in `store.go` and a case in
   `api.writeStoreError`, or it becomes a 500.
 
+- Workflow code in `internal/checkout` must be deterministic (Temporal replays
+  it): no `time.Now`, randomness, goroutines or I/O; use `workflow.Now`,
+  timers and activities. Activities that can retry must be idempotent.
+
 ## Migrations
 
 Add a new numbered file `migrations/000N_name.sql`; never edit an applied one.

@@ -106,11 +106,76 @@ hold returns 409.
 `seats.order_id` is a `DEFERRABLE INITIALLY DEFERRED` foreign key, so purchase
 can mark seats sold before inserting the order row, all in one transaction.
 
+## Checkout workflow (Temporal)
+
+`internal/checkout` runs a whole checkout as a [Temporal](https://temporal.io)
+workflow, on top of the same store code:
+
+```
+CreateHold ──► wait for "pay" signal ──► ChargePayment ──► Purchase ──► purchased
+                   │ or hold timer fires       │ declined        │ fails
+                   ▼                           ▼                 ▼
+              ReleaseHold                 ReleaseHold      RefundPayment → ReleaseHold
+              (hold_expired)            (payment_failed)    (purchase_failed)
+```
+
+- **Durable waiting.** The hold timer is a Temporal timer set to the hold's
+  `expires_at`. If every worker crashes, the timer still fires, and the
+  workflow resumes where it left off.
+- **Saga.** Each step that fails undoes the earlier ones in reverse order. The
+  important case: the charge succeeds but `Purchase` fails (e.g. the hold
+  expired during the charge). Then the buyer is refunded and the hold released.
+- **Retries and idempotency.** Activities retry transient errors (a 1s, 2s, 4s…
+  backoff, up to 5 attempts). Business errors (seats taken, hold expired,
+  card declined) are marked non-retryable, because retrying can't fix them.
+  Because a retry can repeat work whose result was lost, every retried step
+  has to be idempotent:
+  - The charge uses the key `<idempotency key>:charge`, which the payment
+    provider dedupes.
+  - `Purchase` uses the idempotency key.
+  - Releasing twice is a no-op.
+  - `CreateHold` isn't idempotent, so it gets a single attempt. A hold
+    orphaned by a lost response simply expires.
+- **Determinism.** Temporal recovers a workflow by replaying its history
+  through the workflow code, so that code avoids `time.Now`, randomness and
+  I/O (it uses `workflow.Now` and timers). All I/O lives in activities.
+- **Payments** is an interface. `FakePayments` is an in-memory stand-in that
+  dedupes by key like a real provider.
+
+The tests (`internal/checkout/workflow_test.go`) use Temporal's in-process
+test environment, so they need no server, and they skip over time
+(simulated), so a 10-minute timer fires instantly. They cover:
+- the happy path;
+- expiry without payment;
+- a declined card;
+- refund-then-release when `Purchase` fails;
+- a charge whose response is lost: it's retried and charged only once.
+
+To run it against a real Temporal dev server (needs the
+[Temporal CLI](https://docs.temporal.io/cli), not installed by this repo):
+
+```bash
+temporal server start-dev                  # UI at http://localhost:8233
+make run                                   # in another terminal: DB + migrations
+go run ./cmd/worker                        # TEMPORAL_ADDRESS defaults to localhost:7233
+temporal workflow start --task-queue checkout --type CheckoutWorkflow \
+  --workflow-id checkout-order-1 \
+  --input '{"event_id":<event id>,"buyer_id":"alice","seat_ids":[<seat id>],"idempotency_key":"order-1"}'
+temporal workflow signal --workflow-id checkout-order-1 --name pay \
+  --input '{"payment_token":"tok_ok"}'     # "tok_decline" to see the compensation path
+temporal workflow result --workflow-id checkout-order-1
+```
+
+Using the idempotency key in the workflow ID means Temporal itself refuses a
+second checkout for the same key while the first one is running.
+
 ## Layout
 
 ```
 cmd/server/          main: config, pool, migrations, HTTP server, graceful shutdown
+cmd/worker/          Temporal worker for the checkout workflow
 internal/api/        routing, validation, store-error → HTTP status mapping
+internal/checkout/   Temporal checkout workflow, activities, fake payment provider
 internal/store/      all SQL: hold.go, purchase.go, seats.go, migrate.go, store.go (tx helper, errors)
 migrations/          embedded *.sql schema files
 scripts/seed.sql     demo data
