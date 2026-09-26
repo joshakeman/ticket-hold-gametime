@@ -73,6 +73,9 @@ Sending the same purchase again returns the same order with status 200.
 
 ## How the concurrency works
 
+Diagrams of the architecture, data model, seat lifecycle, the hold race, idempotent
+purchase and the Temporal checkout are in [docs/diagrams.md](docs/diagrams.md).
+
 **Every seat is its own row, and state changes are compare-and-set UPDATEs.**
 A hold claims seats with
 
